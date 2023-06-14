@@ -1,0 +1,29 @@
+[project]
+name = "openmdao-bridge-catia"
+dynamic = ["version"]
+dependencies = [
+  "numpy",
+  "openmdao",
+  "pywin32",
+]
+[project.optional-dependencies]
+test = [
+  "pytest",
+]
+
+[metadata]
+author = "Olle Vidner"
+
+[build-system]
+requires = ["setuptools>=61", "setuptools_scm[toml]>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools_scm]
+
+[tool.conda-lock]
+channels = ["conda-forge", "defaults"]
+platforms = ["win-64"]
+
+[tool.conda-lock.dependencies]
+python = ">=3.9"
+pip = "*"
