@@ -12,6 +12,8 @@ from pywintypes import com_error
 from win32com.client.dynamic import Dispatch as DynamicDispatch
 from win32com.client.gencache import EnsureDispatch as Dispatch
 
+from .utils import recast, type_name, get_catia_session
+
 try:
     import scop
 
@@ -22,14 +24,6 @@ except ImportError:
 
 
 NOT_SET = object()
-
-
-def recast(obj):
-    return Dispatch(DynamicDispatch(obj))
-
-
-def type_name(obj):
-    return getattr(obj, "_oleobj_", obj).GetTypeInfo().GetDocumentation(-1)[0]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -69,13 +63,6 @@ def coll(collection, *args):
         yield collection.Item(i, *args)
 
 
-def type_name(obj):
-    try:
-        return getattr(obj, "_oleobj_", obj).GetTypeInfo(0).GetDocumentation(-1)[0]
-    except com_error:
-        return None
-
-
 INPUT_PARAM_SET_NAME = "OpenMDAO bridge input parameters"
 OUTPUT_PARAM_SET_NAME = "OpenMDAO bridge output parameters"
 
@@ -103,11 +90,6 @@ def units_catia_to_om(catia_unit):
 
 def units_om_to_catia(om_unit):
     return OM_TO_CATIA_UNIT_MAP.get(om_unit, om_unit)
-
-
-def get_catia_session():
-    # FIXME: start or get catia
-    return Dispatch("CATIA.Application")
 
 
 def load_document(catia, path, open_=True):

@@ -1,20 +1,22 @@
 import pytest
 import openmdao.api as om
-from openmdao_bridge_catia import CatiaComp, recast
+from openmdao_bridge_catia import utils, CatiaComp
 from win32com.client.gencache import EnsureDispatch
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def catia_instance():
-    catia = EnsureDispatch("CATIA.Application")
+    print("Starting CATIA...")
+    catia = utils.get_catia_session()
     catia.Visible = True
     yield catia
+    print("Closing CATIA...")
     catia.Quit()
 
 
 @pytest.fixture
 def part_doc(catia_instance):
-    part_doc = recast(catia_instance.Documents.Add("Part"))
+    part_doc = utils.recast(catia_instance.Documents.Add("Part"))
     part = part_doc.Part
     params = part.Parameters
     params.CreateReal("Real.1", 0)
