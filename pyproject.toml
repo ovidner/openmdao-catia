@@ -25,5 +25,6 @@ channels = ["conda-forge", "defaults"]
 platforms = ["win-64"]
 
 [tool.conda-lock.dependencies]
+# TODO: add scop
 python = ">=3.9"
 pip = "*"

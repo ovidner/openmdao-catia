@@ -8,19 +8,12 @@ import warnings
 
 import numpy as np
 import openmdao.api as om
+import scop
 from pywintypes import com_error
 from win32com.client.dynamic import Dispatch as DynamicDispatch
 from win32com.client.gencache import EnsureDispatch as Dispatch
 
 from .utils import recast, type_name, get_catia_session
-
-try:
-    import scop
-
-    SCOP_AVAILABLE = True
-except ImportError:
-    scop = SimpleNamespace(Param=SimpleNamespace())
-    SCOP_AVAILABLE = False
 
 
 NOT_SET = object()
@@ -188,34 +181,19 @@ def reflect_parameter(source_param, destination_params, destination_param_name):
         raise TypeError(f"Unknown parameter type {source_param_type}.")
 
 
-def _gen_var_mappings(var_dict: dict, root_object) -> Iterator[CatiaVarMapping]:
+def _gen_var_mappings(
+    var_dict: dict[str, str | dict | scop.Param], root_object
+) -> Iterator[scop.Param]:
     for catia_name, var in var_dict.items():
         if isinstance(var, str):
-            given_om_name = var
-            given_discrete = None
-            given_val = None
-            given_units = None
-            given_desc = ""
-            given_tags = []
-            given_scop_param = None
+            given = scop.Param(name=var)
 
         elif isinstance(var, dict):
-            given_om_name = var["name"]
-            given_val = var.get("val", None)
-            given_units = var.get("units", None)
-            given_discrete = var.get("discrete", None)
-            given_desc = var.get("desc", "")
-            given_tags = var.get("tags", [])
-            given_scop_param = None
+            var.pop("val", None)
+            given = scop.Param(**var)
 
-        elif SCOP_AVAILABLE and isinstance(var, (scop.Param)):
-            given_om_name = var.name
-            given_val = var.val
-            given_units = var.units
-            given_discrete = var.discrete
-            given_desc = var.desc
-            given_tags = var.tags
-            given_scop_param = var
+        elif isinstance(var, scop.Param):
+            given = var
 
         try:
             catia_param = recast(root_object.Parameters.Item(catia_name))
@@ -227,31 +205,30 @@ def _gen_var_mappings(var_dict: dict, root_object) -> Iterator[CatiaVarMapping]:
         catia_units = units_catia_to_om(catia_raw_units)
         catia_desc = catia_param.Comment
 
-        if given_discrete is None:
+        if given.discrete is None:
             # Provide some reasonable defaults
             discrete = catia_type in ["BoolParam", "IntParam", "StrParam"]
-        elif given_discrete is False and catia_type in ["StrParam"]:
+        elif given.discrete is False and catia_type in ["StrParam"]:
             # Stop the user from doing something that will break
             raise ValueError(f"Parameter {catia_name} must be discrete.")
         else:
             # ... and let the user decide otherwise. This implies that
             # also real/dimension values can be used as discrete
             # variables, which might make sense in some cases.
-            discrete = given_discrete
+            discrete = given.discrete
 
         # TODO: notify the user if the units don't match
 
-        yield CatiaVarMapping(
-            catia_name=catia_name,
-            catia_param=catia_param,
-            om_name=given_om_name,
-            val=given_val or catia_val,
+        meta = given.meta.copy()
+        meta["catia-bridge"] = {"name": catia_name, "param": catia_param}
+
+        yield given.override(
+            default=given.default or catia_val,
             # This is the only place where CATIA gets the upper hand
-            units=catia_units or given_units,
-            desc=given_desc or catia_desc,
-            tags=given_tags,
+            units=catia_units or given.units,
+            desc=given.desc or catia_desc,
             discrete=discrete,
-            scop_param=given_scop_param,
+            meta=meta,
         )
 
 
@@ -287,38 +264,10 @@ class CatiaComp(om.ExplicitComponent):
         )
 
         for input_mapping in self.input_mappings:
-            if input_mapping.discrete:
-                self.add_discrete_input(
-                    name=input_mapping.om_name,
-                    val=input_mapping.val,
-                    desc=input_mapping.desc,
-                    tags=input_mapping.tags,
-                )
-            else:
-                self.add_input(
-                    name=input_mapping.om_name,
-                    val=input_mapping.val,
-                    units=input_mapping.units,
-                    desc=input_mapping.desc,
-                    tags=input_mapping.tags,
-                )
+            scop.add_input_param(self, input_mapping)
 
         for output_mapping in self.output_mappings:
-            if output_mapping.discrete:
-                self.add_discrete_output(
-                    name=output_mapping.om_name,
-                    val=output_mapping.val,
-                    desc=output_mapping.desc,
-                    tags=output_mapping.tags,
-                )
-            else:
-                self.add_output(
-                    name=output_mapping.om_name,
-                    val=output_mapping.val,
-                    units=output_mapping.units,
-                    desc=output_mapping.desc,
-                    tags=output_mapping.tags,
-                )
+            scop.add_output_param(self, output_mapping)
 
         # original_params = dict(generate_params(root_object, chain(
         #     self.options["in_parameters"].values(),
@@ -385,23 +334,25 @@ class CatiaComp(om.ExplicitComponent):
     def compute(self, inputs, outputs, discrete_inputs=None, discrete_outputs=None):
         for input_mapping in self.input_mappings:
             if input_mapping.discrete:
-                val = discrete_inputs[input_mapping.om_name]
+                val = discrete_inputs[input_mapping.name]
             else:
-                val = np.ndarray.item(inputs[input_mapping.om_name])
-            set_parameter_value(input_mapping.catia_param, val, input_mapping.units)
+                val = np.ndarray.item(inputs[input_mapping.name])
+            set_parameter_value(
+                input_mapping.meta["catia-bridge"]["param"], val, input_mapping.units
+            )
 
         self.root_document.Activate()
         self.root_object.Update()
 
         for output_mapping in self.output_mappings:
             type_, val, catia_unit = parameter_type_value_and_unit(
-                output_mapping.catia_param
+                output_mapping.meta["catia-bridge"]["param"]
             )
             assert catia_unit == units_om_to_catia(output_mapping.units)
             if output_mapping.discrete:
-                discrete_outputs[output_mapping.om_name] = val
+                discrete_outputs[output_mapping.name] = val
             else:
-                outputs[output_mapping.om_name] = float(val)
+                outputs[output_mapping.name] = float(val)
 
         # for var in self.options["outputs"]:
         #     param = self.root_object.Parameters.Item(var.catia_name)

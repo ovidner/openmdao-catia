@@ -2,6 +2,15 @@ import pytest
 import openmdao.api as om
 from openmdao_bridge_catia import utils, CatiaComp
 from win32com.client.gencache import EnsureDispatch
+from scop import (
+    Param,
+    ParamSet,
+    IntegerSpace,
+    RealSpace,
+    InnumSpace,
+    EnumSpace,
+    bool_space,
+)
 
 
 @pytest.fixture
@@ -44,32 +53,47 @@ def test_single_eval(catia_instance, part_path):
     prob = om.Problem()
     model = prob.model
 
+    params = ParamSet(
+        [
+            Param(name="real", space=RealSpace()),
+            Param(name="integer", space=IntegerSpace(), discrete=True),
+            Param(name="string", space=InnumSpace(), discrete=True),
+            Param(name="boolean", space=bool_space(), discrete=True),
+            Param(name="length", space=RealSpace(), units="m"),
+            Param(name="angle", space=RealSpace(), units="deg"),
+            Param(name="time", space=RealSpace(), units="s"),
+            Param(name="mass", space=RealSpace(), units="kg"),
+            Param(name="volume", space=RealSpace(), units="m**3"),
+            Param(name="area", space=RealSpace(), units="m**2"),
+        ]
+    )
+
     catia_comp = CatiaComp(
         # instance=catia_instance,
         file_path=part_path,
         inputs={
-            "Real.1": {"name": "in-real", "discrete": False},
-            "Integer.1": {"name": "in-integer", "discrete": True},
-            "String.1": {"name": "in-string", "discrete": True},
-            "Boolean.1": {"name": "in-boolean", "discrete": True},
-            "Length.1": {"name": "in-length", "discrete": False},
-            "Angle.1": {"name": "in-angle", "discrete": False},
-            "Time.1": {"name": "in-time", "discrete": False},
-            "Mass.1": {"name": "in-mass", "discrete": False},
-            "Volume.1": {"name": "in-volume", "discrete": False},
-            "Area.1": {"name": "in-area", "discrete": False},
+            "Real.1": params["real"].override(name="in-real"),
+            "Integer.1": params["integer"].override(name="in-integer"),
+            "String.1": params["string"].override(name="in-string"),
+            "Boolean.1": params["boolean"].override(name="in-boolean"),
+            "Length.1": params["length"].override(name="in-length"),
+            "Angle.1": params["angle"].override(name="in-angle"),
+            "Time.1": params["time"].override(name="in-time"),
+            "Mass.1": params["mass"].override(name="in-mass"),
+            "Volume.1": params["volume"].override(name="in-volume"),
+            "Area.1": params["area"].override(name="in-area"),
         },
         outputs={
-            "Real.1": {"name": "out-real", "discrete": False},
-            "Integer.1": {"name": "out-integer", "discrete": True},
-            "String.1": {"name": "out-string", "discrete": True},
-            "Boolean.1": {"name": "out-boolean", "discrete": True},
-            "Length.1": {"name": "out-length", "discrete": False},
-            "Angle.1": {"name": "out-angle", "discrete": False},
-            "Time.1": {"name": "out-time", "discrete": False},
-            "Mass.1": {"name": "out-mass", "discrete": False},
-            "Volume.1": {"name": "out-volume", "discrete": False},
-            "Area.1": {"name": "out-area", "discrete": False},
+            "Real.1": params["real"].override(name="out-real"),
+            "Integer.1": params["integer"].override(name="out-integer"),
+            "String.1": params["string"].override(name="out-string"),
+            "Boolean.1": params["boolean"].override(name="out-boolean"),
+            "Length.1": params["length"].override(name="out-length"),
+            "Angle.1": params["angle"].override(name="out-angle"),
+            "Time.1": params["time"].override(name="out-time"),
+            "Mass.1": params["mass"].override(name="out-mass"),
+            "Volume.1": params["volume"].override(name="out-volume"),
+            "Area.1": params["area"].override(name="out-area"),
         },
     )
 
