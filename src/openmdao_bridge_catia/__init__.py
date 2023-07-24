@@ -1,36 +1,13 @@
-import dataclasses
 import enum
 import os
-from itertools import chain
-from types import SimpleNamespace
-from typing import Any, Iterator, Optional
-import warnings
+from typing import Iterator
 
 import numpy as np
 import openmdao.api as om
 import scop
 from pywintypes import com_error
-from win32com.client.dynamic import Dispatch as DynamicDispatch
-from win32com.client.gencache import EnsureDispatch as Dispatch
 
-from .utils import recast, type_name, get_catia_session
-
-
-NOT_SET = object()
-
-
-@dataclasses.dataclass(frozen=True)
-class CatiaVarMapping:
-    catia_name: str
-    catia_param: Any
-    om_name: str
-    val: Any = None
-    units: str = None
-    desc: str = None
-    tags: Optional[list] = None
-    discrete: bool = False
-    shape: tuple = (1,)
-    scop_param: scop.Param = None
+from .utils import get_catia_session, recast, type_name, update_object
 
 
 class RootType(enum.Enum):
@@ -50,19 +27,6 @@ class RootType(enum.Enum):
             raise ValueError(f"Unrecognized document type: {type_name}")
 
 
-def coll(collection, *args):
-    count = collection.Count
-    for i in range(1, count + 1):
-        yield collection.Item(i, *args)
-
-
-INPUT_PARAM_SET_NAME = "OpenMDAO bridge input parameters"
-OUTPUT_PARAM_SET_NAME = "OpenMDAO bridge output parameters"
-
-CONTINUOUS_PARAM_TYPES = {"Dimension", "RealParam"}
-DISCRETE_PARAM_TYPES = {"BoolParam", "IntParam", "StrParam"}
-ALL_PARAM_TYPES = CONTINUOUS_PARAM_TYPES & DISCRETE_PARAM_TYPES
-
 # TODO: use a translation regex instead
 UNIT_PAIRS = [
     # (CATIA unit, OpenMDAO unit)
@@ -70,6 +34,7 @@ UNIT_PAIRS = [
     ("m3", "m**3"),
     ("mm", "mm"),
     ("m", "m"),
+    ("N_m2", "N/m**2"),
 ]
 
 CATIA_TO_OM_UNIT_MAP = {catia_unit: om_unit for (catia_unit, om_unit) in UNIT_PAIRS}
@@ -105,26 +70,17 @@ def load_document(catia, path, open_=True):
         return recast(sti_db_item.GetDocument())
 
 
-def parameter_unit(param):
-    try:
-        unit = param.Unit.Symbol
-    except (AttributeError, com_error):
-        unit = None
-
-    return unit
-
-
 def parameter_type_value_and_unit(param):
     # Dimension params have a lot of subclasses, but they all should have a Unit property
     if hasattr(param, "Unit"):
         type_ = "Dimension"
         unit = param.Unit.Symbol
-        value = float(param.ValueAsString().replace(unit or "", "").strip())
+        value = float(param.Value)
     else:
         unit = None
         type_ = type_name(param)
         if type_ == "RealParam":
-            value = float(param.ValueAsString())
+            value = float(param.Value)
         elif type_ in ["BoolParam", "IntParam", "StrParam"]:
             value = param.Value
         else:
@@ -148,37 +104,11 @@ def set_parameter_value(param, val, om_units):
             raise ValueError(f"Unrecognized parameter type: {type_}")
 
 
-def generate_params(root_object, relatable_parameter_names):
-    remaining_params = set(relatable_parameter_names)
-    parameters = root_object.Parameters
-    for param in coll(parameters):
-        if not remaining_params:
-            break
-        name = parameters.GetNameToUseInRelation(param)
-        if name in remaining_params:
-            remaining_params.remove(name)
-            yield (name, param)
-    else:
-        if remaining_params:
-            raise LookupError(f"The parameters {remaining_params} could not be found.")
-
-
-def reflect_parameter(source_param, destination_params, destination_param_name):
-    source_param_type = type_name(source_param)
-
-    if source_param_type in ["Dimension", "Length", "Angle"]:
-        new_param = destination_params.CreateDimension(
-            destination_param_name, source_param.Unit.Magnitude, 0
-        )
-        new_param.ValuateFromString(source_param.ValueAsString())
-        return new_param, new_param.Unit.Symbol
-    elif source_param_type == "RealParam":
-        new_param = destination_params.CreateReal(
-            destination_param_name, source_param.Value
-        )
-        return new_param, None
-    else:
-        raise TypeError(f"Unknown parameter type {source_param_type}.")
+def get_catia_param(root_object, name):
+    try:
+        return recast(root_object.Parameters.Item(name))
+    except com_error:
+        raise ValueError(f"Parameter {name} not found in CATIA document.")
 
 
 def _gen_var_mappings(
@@ -187,18 +117,15 @@ def _gen_var_mappings(
     for catia_name, var in var_dict.items():
         if isinstance(var, str):
             given = scop.Param(name=var)
-
         elif isinstance(var, dict):
             var.pop("val", None)
             given = scop.Param(**var)
-
         elif isinstance(var, scop.Param):
             given = var
+        else:
+            raise TypeError(f"Unrecognized variable definition: {var}")
 
-        try:
-            catia_param = recast(root_object.Parameters.Item(catia_name))
-        except com_error:
-            raise ValueError(f"Parameter {catia_name} not found in CATIA document.")
+        catia_param = get_catia_param(root_object, catia_name)
         catia_type, catia_val, catia_raw_units = parameter_type_value_and_unit(
             catia_param
         )
@@ -220,11 +147,13 @@ def _gen_var_mappings(
         # TODO: notify the user if the units don't match
 
         meta = given.meta.copy()
-        meta["catia-bridge"] = {"name": catia_name, "param": catia_param}
+        meta["catia-bridge"] = {"name": catia_name}
 
         yield given.override(
-            default=given.default or catia_val,
-            # This is the only place where CATIA gets the upper hand
+            # FIXME: this should respect the user's default value, but
+            # that would need to be unit converted
+            default=catia_val,
+            # This is the only place where CATIA should get to decide
             units=catia_units or given.units,
             desc=given.desc or catia_desc,
             discrete=discrete,
@@ -234,15 +163,13 @@ def _gen_var_mappings(
 
 class CatiaComp(om.ExplicitComponent):
     def initialize(self):
-        self.options.declare("file_path", types=os.PathLike)
+        self.options.declare("document", types=(str, os.PathLike))
         self.options.declare("inputs", types=dict)
         self.options.declare("outputs", types=dict)
-        self.options.declare("in_parameters", types=dict)
-        self.options.declare("out_parameters", types=dict)
 
     def setup(self):
         catia = get_catia_session()
-        document = load_document(catia, self.options["file_path"])
+        document = load_document(catia, self.options["document"])
         root_type = RootType.from_doc_type_name(type_name(document))
         if root_type is RootType.ANALYSIS:
             root_object = document.Analysis
@@ -269,96 +196,34 @@ class CatiaComp(om.ExplicitComponent):
         for output_mapping in self.output_mappings:
             scop.add_output_param(self, output_mapping)
 
-        # original_params = dict(generate_params(root_object, chain(
-        #     self.options["in_parameters"].values(),
-        #     self.options["out_parameters"].values(),
-        # )))
-
-        # param_sets = root_object.Parameters.RootParameterSet.ParameterSets
-
-        # try:
-        #     input_param_set = param_sets.Item(INPUT_PARAM_SET_NAME)
-        # except com_error as exc:
-        #     if exc.excepinfo[2] == "The method Item failed":
-        #         input_param_set = param_sets.CreateSet(INPUT_PARAM_SET_NAME)
-        #     else:
-        #         raise exc
-
-        # try:
-        #     output_param_set = param_sets.Item(OUTPUT_PARAM_SET_NAME)
-        # except com_error as exc:
-        #     if exc.excepinfo[2] == "The method Item failed":
-        #         output_param_set = param_sets.CreateSet(OUTPUT_PARAM_SET_NAME)
-        #     else:
-        #         raise exc
-
-        # for internal_param_name, catia_param_name in self.options["in_parameters"].items():
-        #     original_param = original_params[catia_param_name]
-        #     params = input_param_set.AllParameters
-        #     rel = original_param.OptionalRelation
-        #     if rel:
-        #         rel.Parent.Remove(rel.Name)
-        #     try:
-        #         params.Remove(internal_param_name)
-        #     except com_error:
-        #         pass
-        #     new_param, new_param_unit = reflect_parameter(
-        #         original_param,
-        #         params,
-        #         internal_param_name,
-        #     )
-
-        #     root_object.Relations.CreateFormula(f"Input.{internal_param_name}", "", original_param, params.GetNameToUseInRelation(new_param))
-        #     self.add_input(internal_param_name, np.nan, units=CATIA_TO_OM_UNIT_MAP[new_param_unit])
-
-        # for internal_param_name, catia_param_name in self.options["out_parameters"].items():
-        #     original_param = original_params[catia_param_name]
-        #     params = output_param_set.AllParameters
-        #     try:
-        #         params.Remove(internal_param_name)
-        #     except com_error:
-        #         pass
-        #     new_param, new_param_unit = reflect_parameter(
-        #         original_param,
-        #         params,
-        #         internal_param_name,
-        #     )
-        #     root_object.Relations.CreateFormula(f"Output.{internal_param_name}", "", new_param, catia_param_name)
-        #     self.add_output(internal_param_name, np.nan, units=CATIA_TO_OM_UNIT_MAP[new_param_unit])
-
-        # self.input_params = input_param_set.AllParameters
-        # self.output_params = output_param_set.AllParameters
-
-        # self.declare_partials("*", "*", method="fd")
-
     def compute(self, inputs, outputs, discrete_inputs=None, discrete_outputs=None):
-        for input_mapping in self.input_mappings:
-            if input_mapping.discrete:
-                val = discrete_inputs[input_mapping.name]
-            else:
-                val = np.ndarray.item(inputs[input_mapping.name])
-            set_parameter_value(
-                input_mapping.meta["catia-bridge"]["param"], val, input_mapping.units
-            )
+        try:
+            for input_mapping in self.input_mappings:
+                if input_mapping.discrete:
+                    val = discrete_inputs[input_mapping.name]
+                else:
+                    val = np.ndarray.item(inputs[input_mapping.name])
+                input_param = get_catia_param(
+                    self.root_object, input_mapping.meta["catia-bridge"]["name"]
+                )
+                set_parameter_value(
+                    input_param,
+                    val,
+                    input_mapping.units,
+                )
 
-        self.root_document.Activate()
-        self.root_object.Update()
+            self.root_document.Activate()
+            update_object(self.root_object)
 
-        for output_mapping in self.output_mappings:
-            type_, val, catia_unit = parameter_type_value_and_unit(
-                output_mapping.meta["catia-bridge"]["param"]
-            )
-            assert catia_unit == units_om_to_catia(output_mapping.units)
-            if output_mapping.discrete:
-                discrete_outputs[output_mapping.name] = val
-            else:
-                outputs[output_mapping.name] = float(val)
-
-        # for var in self.options["outputs"]:
-        #     param = self.root_object.Parameters.Item(var.catia_name)
-        #     # We can't really know for sure what unit CATIA will give us, so we'll play it safe.
-        #     catia_val, catia_unit = parameter_value_and_unit(param)
-        #     val = om.convert_units(
-        #         catia_val, CATIA_TO_OM_UNIT_MAP[catia_unit], var.units
-        #     )
-        #     outputs[var.name] = val
+            for output_mapping in self.output_mappings:
+                output_param = get_catia_param(
+                    self.root_object, output_mapping.meta["catia-bridge"]["name"]
+                )
+                type_, val, catia_unit = parameter_type_value_and_unit(output_param)
+                assert catia_unit == units_om_to_catia(output_mapping.units)
+                if output_mapping.discrete:
+                    discrete_outputs[output_mapping.name] = val
+                else:
+                    outputs[output_mapping.name] = float(val)
+        except com_error as exc:
+            raise om.AnalysisError(f"CATIA error: {exc}", exc)

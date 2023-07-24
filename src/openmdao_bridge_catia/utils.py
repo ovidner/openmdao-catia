@@ -1,8 +1,9 @@
 import enum
+
 from pywintypes import com_error
+from win32com.client import Dispatch, GetObject
 from win32com.client.dynamic import Dispatch as DynamicDispatch
 from win32com.client.gencache import EnsureDispatch
-from win32com.client import Dispatch, GetObject, GetActiveObject
 
 
 class SensorType(enum.StrEnum):
@@ -43,7 +44,6 @@ def recast(obj):
 
 
 def get_catia_session():
-    # FIXME: start or get catia
     try:
         return GetObject(Class="CATIA.Application")
     except com_error:
@@ -64,3 +64,23 @@ def catia_alive(catia):
         return True
     except com_error:
         return False
+
+
+def update_object(obj):
+    """
+    Update the given CATIA object to accommodate parameter changes.
+    """
+    obj_type = type_name(obj)
+    if obj_type == "AnalysisManager":
+        for set_ in obj.AnalysisSets:
+            set_.Update()
+
+        for model in obj.AnalysisModels:
+            for case in model.AnalysisCases:
+                case.Compute()
+                for set_ in case.AnalysisSets:
+                    set_.Update()
+    elif obj_type in ["Part", "Product"]:
+        obj.Update()
+    else:
+        raise TypeError(f"Cannot update object of type {obj_type}")

@@ -1,16 +1,8 @@
-import pytest
 import openmdao.api as om
-from openmdao_bridge_catia import utils, CatiaComp
-from win32com.client.gencache import EnsureDispatch
-from scop import (
-    Param,
-    ParamSet,
-    IntegerSpace,
-    RealSpace,
-    InnumSpace,
-    EnumSpace,
-    bool_space,
-)
+import pytest
+from scop import InnumSpace, IntegerSpace, Param, ParamSet, RealSpace, bool_space
+
+from openmdao_bridge_catia import CatiaComp, utils
 
 
 @pytest.fixture
@@ -70,7 +62,7 @@ def test_single_eval(catia_instance, part_path):
 
     catia_comp = CatiaComp(
         # instance=catia_instance,
-        file_path=part_path,
+        document=part_path,
         inputs={
             "Real.1": params["real"].override(name="in-real"),
             "Integer.1": params["integer"].override(name="in-integer"),
