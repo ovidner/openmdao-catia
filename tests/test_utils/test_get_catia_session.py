@@ -1,7 +1,7 @@
 import psutil
 import pytest
 
-from openmdao_bridge_catia import utils
+from openmdao_catia import utils
 
 
 @pytest.fixture(autouse=True)
