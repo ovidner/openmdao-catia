@@ -1,6 +1,6 @@
 import openmdao.api as om
 import pytest
-from scop import InnumSpace, IntegerSpace, Param, ParamSet, RealSpace, bool_space
+from facit import InnumSpace, IntegerSpace, Param, ParamSet, RealSpace, bool_space
 
 from openmdao_bridge_catia import CatiaComp, utils
 

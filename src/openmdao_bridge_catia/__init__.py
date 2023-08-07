@@ -2,9 +2,9 @@ import enum
 import os
 from typing import Iterator
 
+import facit
 import numpy as np
 import openmdao.api as om
-import scop
 from pywintypes import com_error
 
 from .utils import get_catia_session, recast, type_name, update_object
@@ -112,15 +112,15 @@ def get_catia_param(root_object, name):
 
 
 def _gen_var_mappings(
-    var_dict: dict[str, str | dict | scop.Param], root_object
-) -> Iterator[scop.Param]:
+    var_dict: dict[str, str | dict | facit.Param], root_object
+) -> Iterator[facit.Param]:
     for catia_name, var in var_dict.items():
         if isinstance(var, str):
-            given = scop.Param(name=var)
+            given = facit.Param(name=var)
         elif isinstance(var, dict):
             var.pop("val", None)
-            given = scop.Param(**var)
-        elif isinstance(var, scop.Param):
+            given = facit.Param(**var)
+        elif isinstance(var, facit.Param):
             given = var
         else:
             raise TypeError(f"Unrecognized variable definition: {var}")
@@ -191,10 +191,10 @@ class CatiaComp(om.ExplicitComponent):
         )
 
         for input_mapping in self.input_mappings:
-            scop.add_input_param(self, input_mapping)
+            facit.add_input_param(self, input_mapping)
 
         for output_mapping in self.output_mappings:
-            scop.add_output_param(self, output_mapping)
+            facit.add_output_param(self, output_mapping)
 
     def compute(self, inputs, outputs, discrete_inputs=None, discrete_outputs=None):
         try:
