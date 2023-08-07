@@ -1,30 +1,41 @@
 [project]
-name = "openmdao-bridge-catia"
+name = "openmdao-catia"
 dynamic = ["version"]
-dependencies = [
-  "numpy",
-  "openmdao",
-  "pywin32",
-]
-[project.optional-dependencies]
-test = [
-  "pytest",
-]
+dependencies = ["facit", "numpy", "openmdao", "pywin32"]
+authors = [{ name = "Olle Vidner", email = "olle@vidner.se" }]
+description = ''
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
 
-[metadata]
-author = "Olle Vidner"
+[project.optional-dependencies]
+test = ["hypothesis", "psutil", "pytest"]
+dev = ["invoke", "nox", "pre-commit"]
+
+[project.urls]
+Homepage = "https://github.com/ovidner/openmdao-catia"
 
 [build-system]
-requires = ["setuptools>=61", "setuptools_scm[toml]>=6.2"]
-build-backend = "setuptools.build_meta"
-
-[tool.setuptools_scm]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
 
 [tool.conda-lock]
 channels = ["conda-forge", "defaults"]
 platforms = ["win-64"]
 
 [tool.conda-lock.dependencies]
-# TODO: add scop
 python = ">=3.9"
 pip = "*"
+
+[tool.hatch.build]
+exclude = [".github"]
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.pytest.ini_options]
+addopts = "--doctest-modules"
+testpaths = ["tests", "src"]
+
+[tool.ruff.isort]
+known-first-party = ["openmdao_catia"]
